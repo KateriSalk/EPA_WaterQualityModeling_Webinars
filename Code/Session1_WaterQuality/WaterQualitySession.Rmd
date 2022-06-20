@@ -1,0 +1,269 @@
+---
+title: "Water Quality Session"
+author: "Kateri Salk"
+date: "2021-09-22"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Intro
+
+Water quality monitoring data can be used across multiple facets of water management, including exploration, stressor-response analysis, assessment, and TMDL development. One of the most comprehensive repositories for water quality data is the [Water Quality Portal](https://www.waterqualitydata.us/). The Water Quality Portal contains data collected by over 400 state, federal, tribal, and local agencies, including EPA STORET data and USGS NWIS data. Processing and analyzing NOAA data is an ideal process to automate, since the data downloaded from NOAA's platform have a consistent format. 
+
+During this session, we will: 
+
+1. Import Water Quality Portal data into R
+2. Automate common processing and quality assurance steps
+3. Wrangle water quality data 
+4. Visualize processed water quality data
+
+
+## Setup
+
+```{r setup, include=FALSE}
+
+# install.packages("tidyverse")
+# install.packages("lubridate")
+# install.packages("viridis")
+# install.packages("dataRetrieval")
+
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(dataRetrieval)
+
+# Set working directory to project location, not to the file location.
+getwd()
+
+
+```
+
+## Acquiring Water Quality Portal Data
+
+the `dataRetrieval` package not only allows us to gather hydrologic information from USGS gage sites, but also water quality data from the Water Quality Portal. We will be using just two of the functions for this session, but there are several great resources that outline the wide-ranging functionality of the package listed below. 
+
+[Introduction to the dataRetrieval package](https://cran.r-project.org/web/packages/dataRetrieval/vignettes/dataRetrieval.html)
+[General Data Import from Water Quality Portal](https://rdrr.io/cran/dataRetrieval/man/readWQPdata.html)
+[Water Quality Portal Web Services Guide](https://www.waterqualitydata.us/webservices_documentation/)
+[dataRetrieval Tutorial](https://owi.usgs.gov/R/dataRetrieval.html)
+
+```{r}
+ManitowocWQ <- readWQPdata(siteid = c("WIDNR_WQX-363219", "WIDNR_WQX-363069"))
+ManitowocSites <- whatWQPsites(siteid = c("WIDNR_WQX-363219", "WIDNR_WQX-363069"))
+```
+
+## Data Processing
+
+The `dplyr` package within `tidyverse` has a term called a pipe, designated as %>%. In coding language, the pipe means "then," allowing you to sequentially run functions on a given data frame. 
+
+
+### Site Metadata
+
+`select` allows us to subset columns of a dataset. Use a colon to specify a range of columns, and commas to specify individual columns.
+
+```{r}
+ManitowocSites_subset <- ManitowocSites %>%
+  select(OrganizationIdentifier:MonitoringLocationName, MonitoringLocationDescriptionText,
+         HUCEightDigitCode, LatitudeMeasure, LongitudeMeasure)
+```
+
+### Water Quality data
+
+Water Quality Portal downloads have the same columns each time, but be aware that data are uploaded to the Water Quality Portal by individual organizations, which may or may not follow the same conventions. Data and metadata quality are not guaranteed! Make sure to carefully explore any data and make conservative quality assurance decisions where information is limited. 
+
+General data processing and quality assurance considerations: 
+
+1. WQP data is acquired in long format. It may be useful to wrangle the dataset into wide format (we will do this today)
+2. `readWQPdata` does not inherently restrict the variables pulled from WQP. You may specify the desired variables by using, for instance: 'characteristicName = "pH"'
+3. **ResultMeasureValue** should be numeric, with details on detection limits, qualifiers, etc. provided in other columns. This is not always the case! 
+4. **ResultSampleFractionText** specifies forms of constituents. In some cases, a single **CharacteristicName** will have both "Total" and "Dissolved" forms specified, which should not be combined. 
+5. Some variables have different names but represent the same constituent (e.g., "Total Kjeldahl nitrogen (Organic N & NH3)" and "Kjeldahl nitrogen"). Always refer to the **ResultAnalyticalMethod** columns to verify methods are measuring the same constituent.
+6. **ActivityDepthHeightMeasure.MeasureValue** provides depth information. This is a crucial column for lake data but less often for river data.
+7. **ResultCommentText** often has details relating to additional QA.
+8. **MeasureQualifierCode** Contains information about data flags: 
+
+  * *U* designates below detection limit (action: set value to 1/2 detection or quantitation limit from **DetectionQuantitationLimitMeasure.MeasureValue**)
+  * *J* designates above detection limit but below quantitation limit (action: retain value)
+  * Other codes may designate suspect data or other flags which may be described in detail in **ResultLaboratoryCommentText** or another column
+
+Wrangling functions we will use (feel free to add notes here or comment in the code): 
+
+* `filter`
+* `mutate`
+* `select`
+* `group_by`
+* `summarise`
+* `left_join`
+
+```{r}
+View(ManitowocWQ)
+
+# Set the date column to date format
+ManitowocWQ$ActivityStartDate <- as.Date(ManitowocWQ$ActivityStartDate, format = "%Y-%m-%d")
+unique(ManitowocWQ$CharacteristicName)
+
+
+# Generate a dataset for only one constituent
+ManitowocWQ_pH <- ManitowocWQ %>%
+  filter(CharacteristicName == "pH")
+
+# Generate a dataset for several constituents
+ManitowocWQ_subset <- ManitowocWQ %>%
+  # filter pH, suspended solids, DO, nutrients, and chlorophyll
+  filter(CharacteristicName %in% c("pH", "Total suspended solids", "Turbidity",
+                                   "Suspended Sediment Concentration (SSC)",
+                                   "Dissolved oxygen (DO)", "Dissolved oxygen saturation",
+                                   "Kjeldahl nitrogen", "Ammonia", "Nitrate + Nitrite", 
+                                   "Inorganic nitrogen (nitrate and nitrite)", 
+                                   "Total Kjeldahl nitrogen (Organic N & NH3)",
+                                   "Orthophosphate", "Phosphate-phosphorus", "Phosphorus",
+                                   "Chlorophyll a (probe relative fluorescence)", 
+                                   "Chlorophyll a, uncorrected for pheophytin"))
+
+# Converting values to numeric
+## Some cells in ResultMeasureValue have * or ND noted. 
+## Samples with * have quality control issues noted in ResultCommentText. Set these to NA.
+## Samples with ND are below detection. Typically these can be set to 1/2 the detection limit. However, DetectionQuantitationLimitMeasure.MeasureValue is empty for those observations so we cannot assign values for this dataset.
+## Setting the column to numeric will set any cells containing non-numeric characters to NA.
+class(ManitowocWQ_subset$ResultMeasureValue)
+ManitowocWQ_subset$ResultMeasureValue <- as.numeric(ManitowocWQ_subset$ResultMeasureValue)
+
+# example: if ResultMeasureValue is "ND", set value to 1/2 quantitation limit
+# example 1:
+# ManitowocWQ <- ManitowocWQ %>%
+#   mutate(ResultMeasureValue = case_when(ResultMeasureValue == "ND" ~ DetectionQuantitationLimitMeasure.MeasureValue/2, 
+#                                         TRUE ~ ResultMeasureValue))
+# example 2: 
+# ManitowocWQ$ResultMeasureValue[ManitowocWQ$ResultMeasureValue == "ND"] <-
+#   ManitowocWQ$DetectionQuantitationLimitMeasure.MeasureValue/2
+
+# example: if MeasureQualifierCode has a "U", set value to 1/2 quantitation limit
+# example 1:
+# ManitowocWQ <- ManitowocWQ %>%
+#   mutate(ResultMeasureValue = case_when(MeasureQualifierCode == "U" ~ DetectionQuantitationLimitMeasure.MeasureValue/2, 
+#                                         TRUE ~ ResultMeasureValue))
+# example 2: 
+# ManitowocWQ$ResultMeasureValue[ManitowocWQ$MeasureQualifierCode == "U"] <-
+#   ManitowocWQ$DetectionQuantitationLimitMeasure.MeasureValue/2
+
+# Clean the dataset
+
+ManitowocWQ_long <- ManitowocWQ_subset %>%
+  # re-name variables with no spaces, assign differently named variables as the same
+  # add units in the name. Units are typically provided in ResultMeasure.MeasureUnitCode
+  mutate(Variable = case_when(CharacteristicName == "pH" ~ "pH",
+                              CharacteristicName == "Total suspended solids" ~ "TSS_mgL",
+                              CharacteristicName == "Suspended Sediment Concentration (SSC)" ~ "TSS_mgL",
+                              CharacteristicName == "Dissolved oxygen (DO)" ~ "DO_mgL",
+                              CharacteristicName == "Dissolved oxygen saturation" ~ "DO_mgL",
+                              CharacteristicName == "Kjeldahl nitrogen" ~ "TKN_mgL",
+                              CharacteristicName == "Ammonia" &  ResultSampleFractionText == "Dissolved" ~ "NH3_mgL",
+                              CharacteristicName == "Ammonia" &  ResultSampleFractionText == "Total" ~ as.character(NA),
+                              CharacteristicName == "Nitrate + Nitrite" ~ "NO23_mgL",
+                              CharacteristicName == "Inorganic nitrogen (nitrate and nitrite)" ~ "NO23_mgL",
+                              CharacteristicName == "Total Kjeldahl nitrogen (Organic N & NH3)" ~ "TKN_mgL",
+                              CharacteristicName == "Orthophosphate" ~ "Orthophosphate_mgL",
+                              CharacteristicName == "Phosphate-phosphorus" &  ResultSampleFractionText == "Dissolved" ~ "TDP_mgL",
+                              CharacteristicName == "Phosphate-phosphorus" &  ResultSampleFractionText == "Total"  ~ "TP_mgL",
+                              CharacteristicName == "Chlorophyll a (probe relative fluorescence)" ~ "Chl_probe_RFU",
+                              CharacteristicName == "Chlorophyll a, uncorrected for pheophytin" ~ "Chla_uncorrected_ugL")) %>%
+  # Select columns of interest
+  select(OrganizationIdentifier, OrganizationFormalName, ActivityStartDate, 
+         ActivityConductingOrganizationText, MonitoringLocationIdentifier, 
+         ActivityDepthHeightMeasure.MeasureValue, ResultMeasureValue, Variable) %>%
+  # If duplicate samples of the same constituent were taken on the same day, calculate the mean
+  group_by(OrganizationIdentifier, OrganizationFormalName, ActivityStartDate, 
+         ActivityConductingOrganizationText, MonitoringLocationIdentifier, 
+         ActivityDepthHeightMeasure.MeasureValue, Variable) %>%
+  summarise(ResultMeasureValue = mean(ResultMeasureValue, na.rm = TRUE)) %>%
+  # Add columnds for Month and Year
+  mutate(Month = month(ActivityStartDate),
+         Year = year(ActivityStartDate)) %>%
+  filter(ActivityDepthHeightMeasure.MeasureValue <= 1) %>%
+  drop_na(Variable)
+
+
+# Create a wide dataset
+ManitowocWQ_wide <- ManitowocWQ_long %>%
+  pivot_wider(names_from = "Variable", values_from = "ResultMeasureValue")
+
+```
+
+### Join data and metadata
+
+```{r}
+ManitowocWQ_wide <- left_join(ManitowocWQ_wide, ManitowocSites_subset)
+```
+
+## Exploratory data analysis
+
+The `ggplot` function in the ggplot2 package (included in tidyverse) allows us to create graphs of our data. 
+```{r}
+
+# Set the theme for visualizations
+theme_set(theme_classic())
+
+
+str(ManitowocWQ_wide)
+summary(ManitowocWQ_wide)
+summary(ManitowocWQ_wide$TP_mgL)
+
+ggplot(ManitowocWQ_wide, aes(x = TP_mgL)) +
+  geom_histogram(fill = "gray", color = "black")
+
+ggplot(ManitowocWQ_wide, aes(x = ActivityStartDate, y = TP_mgL, color = Month)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  theme(legend.position = "top")
+
+ggplot(ManitowocWQ_wide, aes(x = as.factor(Month), y = TP_mgL)) +
+  geom_boxplot() +
+  theme(legend.position = "top")
+
+ggplot(ManitowocWQ_wide, aes(x = TSS_mgL, y = TP_mgL)) +
+  geom_point() +
+  # scale_x_log10() +
+  # scale_y_log10() +
+  theme(legend.position = "top")
+
+ggplot(ManitowocWQ_long, aes( y = ResultMeasureValue)) +
+  geom_boxplot() +
+  facet_wrap(vars(Variable), nrow = 2, scales = "free_y") +
+  scale_y_log10()
+
+```
+
+## Data Management
+
+### Saving datasets
+
+General rules: 
+
+1. Save processed datasets separately from raw data
+2. Use informative file names that are easily sorted and organized in a folder
+3. No spaces in file names
+
+```{r}
+write.csv(ManitowocWQ_long, file = "./Data/Session1_WaterQuality/ManitowocWQ_long_processed.csv",
+          row.names = FALSE)
+
+write.csv(ManitowocWQ_wide, file = "./Data/Session1_WaterQuality/ManitowocWQ_wide_processed.csv",
+          row.names = FALSE)
+
+```
+
+### Saving graphs
+
+In RStudio, you can manually export graphs by saving as image, PDF, or copy-paste. However, the image resolution is poor by this method, and the method itself is not reproducible. Saving your graphs using code is preferable. 
+
+`ggsave` automatically saves the current plot if you don't specify which plot. Alternatively, you can name a plot and save that named plot at any point (does not need to be plotted at the time of saving). Height and width are automatically in inches, and the text size scales accordingly (smaller dimensions = larger text).
+
+```{r}
+
+ggplot(ManitowocWQ_wide, aes(x = TP_mgL)) +
+  geom_histogram(fill = "gray", color = "black")
+ggsave("./Output/Session1_WaterQuality/TPhistogram.jpg", height = 3, width = 4)
+
+```
+
