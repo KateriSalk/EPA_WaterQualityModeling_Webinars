@@ -1,0 +1,30 @@
+---
+title: "EPA Water Modeling Webinar Series: R Coding Setup"
+output: pdf_document
+geometry: margin=2.54cm
+---
+
+
+## R
+
+If you already have R installed, please ensure you are using version 4.1.1 or higher. If not, follow the instructions below. If you do not have R installed, follow the instructions below.
+
+1. Open a web browser and naviate to the Duke CRAN mirror: [http://archive.linux.duke.edu/cran/](http://archive.linux.duke.edu/cran/)
+2. Please select your operating system (Mac, Windows, Linux)
+
+    For Windows Users: install the `base package`
+    
+    For Mac Users: install the R-4.1.1.pkg file. Note: you must have OS X 10.13 (High Sierra) installed or higher. You must also install XQuartz, which can be found in the Latest Release paragraphs on the same page.
+
+## RStudio
+If you already have RStudio installed, please ensure you are using version 1.4.1717 or higher (if you are using a relatively recent version, you likely won't run into any problems). To check that you are using the most up-to-date version, go to the Help menu in RStudio and select "Check for Updates." You will be instructed to install any updates that are available.
+
+If you do not have RStudio  installed on your computer, please do the following:
+
+1. Open a web browser and navigate to [http://www.rstudio.com/products/rstudio/download/](http://www.rstudio.com/products/rstudio/download/)
+2. Select and download the appropriate installer for your operating system (Windows, Mac, Linux)
+3. Open the installer and follow the onscreen directions
+
+## Other R resources
+
+If you would like additional resources for using R and RStudio, [R for Data Science](https://r4ds.had.co.nz/) is a great resource for developing R skills. 

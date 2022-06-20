@@ -1,7 +1,7 @@
 ---
-title: "Water Quality Session"
+title: "EPA Water Modeling Webinar Series: Water Quality"
 author: "Kateri Salk"
-date: "2021-09-22"
+date: "2022-06-21"
 output: pdf_document
 editor_options: 
   chunk_output_type: console
