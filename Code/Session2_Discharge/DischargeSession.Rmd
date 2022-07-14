@@ -1,0 +1,229 @@
+---
+title: "EPA Water Modeling Webinar Series: Stream Discharge"
+author: "Kateri Salk"
+date: "2022-07-19"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Intro
+
+Stream and river discharge data is used across many facets of hydrology and aquatic ecosystem management, including applications involving water quantity as well as quantity. USGS monitors over 8,000 gages nationwide,  which can be accessed in real time at https://waterdata.usgs.gov/nwis/rt.
+
+During this session, we will: 
+
+1. Import USGS discharge data into R
+2. Automate common processing and data exploration steps
+3. Calculate common derived calculations of discharge data including flow-duration curves, recurrence intervals, and baseflow separation
+4. Visualize streamflow hydrographs and rating curves
+
+
+## Setup
+
+```{r setup, include=FALSE}
+
+# install.packages("tidyverse")
+# install.packages("lubridate")
+# install.packages("dataRetrieval")
+# install.packages("lfstat")
+
+library(tidyverse)
+library(lubridate)
+library(dataRetrieval)
+library(lfstat)
+
+theme_set(theme_classic()) # sets default theme for ggplot as "classic"
+
+```
+
+## Acquiring Discharge Data and Accessing the Rating Curve
+
+One of the most important physical characteristics of a stream or river is **discharge**, the volume of water moving through the stream over a given amount of time. Discharge can be measured directly by measuring the velocity of flow in several subsections in a stream and multiplying the flow velocity over the cross-sectional area of the stream. However, this method is effort-intensive. An easier way to approximate discharge is by developing a **rating curve** for a stream at a given sampling point. To develop a rating curve, a series of measurements of discharge and stream stage must be made together to develop a mathematical relationship. Then, subsequent discharge measurements can be calculated from a measurement of stream stage, measured by a gage that takes readings remotely. 
+
+
+We will be using the `dataRetrieval` package today, which allows us to access USGS hydrologic data. We will be using the hydrologic data capabilities of this package today, but the package also comes with additional functionality to access water quality data from the Water Quality Portal. 
+
+dataRetrieval Vignette:
+https://cran.r-project.org/web/packages/dataRetrieval/vignettes/dataRetrieval.html
+
+The function `readNWISdv` allows us to access daily values for given sites, parameters, and dates. We will focus on discharge and stage today. 
+
+The function `whatNWISdata` allows us to access metadata about a site, including what variables have been monitored at that site, start and end dates, and the number of samples for a given variable.
+
+We will be analyzing data from the Eno River in North Carolina today. However, this code can be easily modified for batch processing for multiple sites or collection of data from within a geographic area.
+
+
+```{r}
+# Import Eno River discharge and gage height
+EnoDischarge <- readNWISdv(siteNumbers = "02085070",
+                     parameterCd = c("00060", "00065"), #discharge, cfs and gage height, ft
+                     startDate = "1963-10-01",
+                     endDate = "2021-09-30")
+
+# Metadata for this site and data types
+attr(EnoDischarge, "variableInfo")
+attr(EnoDischarge, "siteInfo")
+EnoSiteInfo <- whatNWISdata(siteNumbers = "02085070")
+
+# Re-name the columns to something we understand
+names(EnoDischarge)[4:7] <- c("Discharge", "D.Approval.Code", 
+                              "Gage.Height", "GH.Approval.Code")
+
+# What is the relationship between discharge and gage height?
+ggplot(EnoDischarge, aes(x = Gage.Height, y = Discharge)) +
+  geom_point(alpha = 0.5) +
+  labs(x = "Gage Height (ft)", y = "Discharge (cfs)")
+
+
+# Access the USGS-developed rating curve
+EnoRatingCurve <- readNWISrating(siteNumber = "02085070")
+
+ggplot(EnoRatingCurve, aes(x = INDEP, y = DEP)) +
+  geom_point(alpha = 0.5) +
+  labs(x = "Gage Height (ft)", y = "Discharge (cfs)")
+
+```
+
+## Computing Recurrence Intervals
+
+A **recurrence interval** is the past recurrence of an event, in this case a peak annual discharge measurement of a given magnitude. The value of a recurrence interval corresponds to the average number of years between discharge of a given magnitude. Typically the minimum amount of years required to construct a recurrence interval is 10, but 30 is more robust. A recurrence interval, T, is calculated as: 
+
+$T = (n+1)/m$
+
+where n is the number of years and m is the ranking of an event within the observed period. We add one to n because we are computing the recurrence interval for a discharge event of a given magnitude *or greater*. 
+
+Similarly, we can calculate an **exceedance probability**, or the probability of encountering a discharge event of a given magnitude or greater in any given year: 
+
+$P = 1/T$
+
+This is where the terms "100-year flood" and similar are derived. Remember this is a probability based on past occurrence, not an accurate forecast of how often we will see that event happening. When current patterns of discharge differ from past patterns, we observe **nonstationary** behavior. Nonstationarity results in events that occur more or less frequency than predicted based on the exceedance probability. See this [USGS article](https://www.usgs.gov/special-topics/water-science-school/science/floods-and-recurrence-intervals) for more in-depth reading on recurrence intervals.
+
+Generally, the more years that are available to calculate a recurrence interval, the more accurate the estimate will be. These calculations assume stationary behavior, so it is prudent to explore your data ahead of time to determine if this assumption is valid.
+
+```{r}
+# Add year and water year to the dataset
+EnoDischarge <- EnoDischarge %>%
+  mutate(Year = year(Date), 
+         WaterYear = water_year(Date, origin = "usgs")) 
+
+# Water Year is a factor. We want to re-classify as numeric.
+class(EnoDischarge$WaterYear)
+EnoDischarge$WaterYear <- as.numeric(as.character(EnoDischarge$WaterYear))
+
+EnoRecurrence <- 
+  EnoDischarge %>%
+  group_by(WaterYear) %>%
+  summarise(PeakDischarge = max(Discharge, na.rm = TRUE)) %>% 
+  mutate(Rank = rank(-PeakDischarge), 
+         RecurrenceInterval = (length(WaterYear) + 1)/Rank, 
+         Probability = 1/RecurrenceInterval)
+
+ggplot(EnoRecurrence, aes(x = WaterYear, y = PeakDischarge)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Year", y = "Peak Discharge (cfs)")
+
+ggplot(EnoRecurrence, aes(x = RecurrenceInterval, y = PeakDischarge)) +
+  geom_point() +
+  scale_x_log10() +
+  geom_smooth(method = "lm", color = "black", se = FALSE)
+
+Eno.RImodel <- lm(data = EnoRecurrence, PeakDischarge ~ log10(RecurrenceInterval))
+summary(Eno.RImodel)
+
+#What is the discharge for a 100-year flood in this system? a 500-year flood?
+Eno.RImodel$coefficients[1] + Eno.RImodel$coefficients[2]*log10(100)
+Eno.RImodel$coefficients[1] + Eno.RImodel$coefficients[2]*log10(500)
+
+```
+
+
+
+## Flow Duration Curves
+
+Flow-duration curves can be generated from daily discharge data, similar to how we calculated recurrence intervals for annual data. 
+
+$P = 100*(m/(n+1))$
+
+where P is the exceedance probability, m is the ranking of all daily mean flows in the period of record (at least 10 years), and n is the total number of daily mean flows. 
+
+```{r}
+
+EnoFlowDuration <- EnoDischarge %>%
+  drop_na(Discharge) %>% # remove NA values for Discharge. n = 38
+  arrange(desc(Discharge)) # sort in descending order
+  
+EnoFlowDuration <- EnoFlowDuration %>%
+  mutate(Rank = 1:nrow(EnoFlowDuration), # rank discharges from 1 to total number of observations
+         ExceedProb = Rank/nrow(EnoFlowDuration)) # calculate exceedance probability
+  
+ggplot(EnoFlowDuration, aes(x = ExceedProb, y = Discharge)) +
+  geom_line() + 
+  scale_y_log10() + 
+  labs(x = "Exceedance Probability", y = "Discharge (cfs)")
+
+```
+
+
+## Baseflow Separation
+
+**Stormflow** (also called quickflow) is attributed to overland flow and shallow subsurface flow that deliver water quickly to a stream or river of interest. 
+
+**Baseflow** is attributed to slower flow pathways, including but not limited to groundwater.
+
+The `lfstat` package includes a calculation for baseflow (function: `baseflow`), which uses a smoothed minima method. Local minima in discharge are identified and then connected by straight lines to represent baseflow. The `EcoHydRology` package also includes a `BaseflowSeparation` function, which uses a recursive digital filter method that creates a smoothed line to represent baseflow. Both of these packages have optional specifications that can be tinkered with by the user based on the specific context of the stream of interest. See the help files for these functions for more info. Caution: EcoHydRology uses functions that will "mask" functions from other packages including dplyr, so it's important if you use EcoHydRology that you load it before loading any other packages. 
+
+```{r}
+EnoBaseflow <- EnoDischarge %>%
+  mutate(Baseflow_lfstat = baseflow(Discharge), 
+         Stormflow_lfstat = Discharge - Baseflow_lfstat)
+
+# plot baseflow and total flow
+ggplot(EnoBaseflow, aes(x = Date, y = Discharge)) +
+  geom_line(color = "gray") +
+  geom_line(aes(y = Baseflow_lfstat)) +
+  # scale_y_log10() +
+  labs(x = "Year", y = "Discharge (cfs)")
+
+# Let's zoom in on a few recent years to look at how baseflow and stormflow vary across seasonal cycles as well as discrete events. 
+
+Eno20182020 <- EnoBaseflow %>%
+  filter(WaterYear %in% c(2018:2020))
+
+ggplot(Eno20182020, aes(x = Date, y = Discharge)) +
+  geom_line(color = "gray") +
+  geom_line(aes(y = Baseflow_lfstat), color = "darkred") +
+  scale_y_log10() +
+  labs(x = "Year", y = "Discharge (cfs)")
+
+EnoSummer19 <- EnoBaseflow %>%
+  filter(Date > "2019-07-15" & Date < "2019-09-01")
+
+ggplot(EnoSummer19, aes(x = Date, y = Discharge)) +
+  geom_line(color = "gray") +
+  geom_line(aes(y = Baseflow_lfstat), color = "darkred") +
+  scale_y_log10() +
+  labs(x = "Year", y = "Discharge (cfs)")
+
+# Let's calculate annual summary statistics to determine how much annual flow is made up of baseflow.
+
+EnoBaseflow_summary <- EnoBaseflow %>%
+  group_by(WaterYear) %>%
+  summarise(Discharge.acft.yr = sum(Discharge)*723.968, # convert to acre-ft per year
+            Baseflow.acft.yr = sum(Baseflow_lfstat)*723.968,
+            Stormflow.acft.yr = sum(Stormflow_lfstat)*723.968,
+            Prop.bf = Baseflow.acft.yr/Discharge.acft.yr,
+            Prop.sf = Stormflow.acft.yr/Discharge.acft.yr) %>%
+  mutate_if(is.numeric, round, 2)
+
+ggplot(EnoBaseflow_summary, aes(x = WaterYear, y = Prop.bf)) +
+  geom_col() +
+  labs(x = "Water Year", y = "Proportion Baseflow")
+
+```
+
+## Bonus content: Low Flow Statistics
+
+We focused today on recurrence intervals, which use peak flow statistics. On the other end of the discharge gradient are low flow statistics, most commonly estimated by 7Q2 and 7Q10 metrics (7-day, 2-year and 10-year annual low flow statistics). These can be used to evaluate drought conditions and are another metric for evaluating stationarity in rivers and streams. 
+
+See the USGS description of these statistics here:(Calculating Flow-Duration and Low-Flow Frequency Statistics at Streamflow-Gaging Stations)[https://pubs.usgs.gov/sir/2008/5126/section3.html]
