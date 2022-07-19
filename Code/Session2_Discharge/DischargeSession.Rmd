@@ -26,7 +26,8 @@ During this session, we will:
 # install.packages("tidyverse")
 # install.packages("lubridate")
 # install.packages("dataRetrieval")
-# install.packages("lfstat")
+# install.packages("lfstat") # NOT SUPPORTED ON CRAN AS OF MAY 2022
+# devtools::install_version("lfstat", "0.9.4")
 
 library(tidyverse)
 library(lubridate)
