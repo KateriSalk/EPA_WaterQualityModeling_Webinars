@@ -1,0 +1,356 @@
+---
+title: "EPA Water Modeling Webinar Series: Weather Data"
+author: "Kateri Salk"
+date: "2022-08-16"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Intro
+
+For many analyses and model applications, we may want to gather local weather and climate conditions to inform the conditions we observe in aquatic systems. Processing and analyzing NOAA data is an ideal process to automate, since the data downloaded from NOAA's platform have a consistent format. 
+
+During this session, we will: 
+
+1. Import NOAA data into RStudio two ways
+2. Process daily weather data
+3. Aggregate precipitation and temperature into monthly and annual summaries
+4. Create visualizations of precipitation and temperature data
+5. Save processed datasets and graphs 
+
+## Setup
+
+To access daily weather data from NOAA, we will use the `rnoaa` package. [Documentation can be found here](https://github.com/ropensci/rnoaa). The documentation includes information about several data sources that can be accessed from `rnoaa`, including not only NCDC climate data but also severe weather data, sea ice data, buoy data, and several others. 
+
+First, to access climate data online, you must have a personal access token. The steps to obtain a token are detailed on the [Web Services Guide](https://www.ncdc.noaa.gov/cdo-web/webservices/v2), where you can find the "token request page". If you already have a token but have forgotten it, this link can also be used to retrieve your token. The token will arrive in your email inbox.
+
+The package `rnoaa` is available on CRAN and can be installed via the usual method. However, an issue was recently identified when trying to download daily weather data using the `lcd` function (https://github.com/ropensci/rnoaa/issues/405). This thread recommends that users directly download the package from GitHub rather than downloading from CRAN, since the developer version on GitHub has a helper function that will avoid throwing an error when downloading data. 
+
+Note: to use the `install_github` function, you will need to have the `devtools` package installed in RStudio (see code line below) as well as have RTools [installed on your machine](https://cran.r-project.org/bin/windows/Rtools/).
+
+If either of these steps (token and package installation) are not possible for you today, we've provided a parallel tutorial using manually downloaded data. The rnoaa tutorial runs from lines 147-240 and the manual tutorial runs from lines 60-146.
+
+
+```{r setup, include=FALSE}
+
+# install.packages("tidyverse")
+# install.packages("lubridate")
+# install.packages("viridis")
+# install.packages("devtools")
+# remotes::install_github("ropensci/rnoaa")
+
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(rnoaa)
+
+# Set working directory to project location, not to the file location.
+getwd()
+
+options(noaakey = "YOURTOKEN") # Update the text in parentheses with your token
+
+lcd_cache$delete_all()
+```
+
+## Acquiring and processing NOAA Weather Data
+
+Documentation for weather data and metadata can be found [here](http://www1.ncdc.noaa.gov/pub/data/cdo/documentation/LCD_documentation.pdf)
+
+### Manual 
+
+**Note: this section intended to run instead of the "rnoaa" section below.**
+
+1. Navigate to https://www.ncdc.noaa.gov/cdo-web/datatools/lcd.
+2. Select your location of interest from the location types listed.
+3. Scroll down to view the stations available within the location of interest. Your station of interest may be on a subsequent page.
+4. OPTIONAL: click on the station name to view station details including location and period of record.
+5. Select "ADD TO CART" for the station of interest. 
+6. View your cart from the top right section of the page.
+7. Select "LCD CSV" and the appropriate date range (maximum of 10 years per order).
+8. Submit request and check email.
+9. Save your file into your raw data folder.
+
+For the Manitowoc, WI weather station (https://www.ncdc.noaa.gov/cdo-web/datasets/LCD/stations/WBAN:94897/detail), these data have already been downloaded for 2012-2021. You may import them into your R session.
+
+```{r, message = FALSE, warning = FALSE}
+manitowoc_weather_manual <- read.csv("./Data/Session3_Weather/Raw/Manitowoc_Weather_20122021_Raw.csv")
+```
+
+`rbind` allows us to bind rows together, one on top of the other. Data frames must have the same number of columns with the same names. 
+
+The `dplyr` package within `tidyverse` has a term called a pipe, designated as %>%. In coding language, the pipe means "then," allowing you to sequentially run functions on a given data frame. 
+
+Other wrangling functions we will use (feel free to add notes here or comment in the code): 
+
+* `select`
+* `drop_na`
+* `separate`
+* `mutate`
+* `filter`
+* `group_by`
+* `summarise`
+
+```{r, message = FALSE, warning = FALSE}
+
+# examine the dataset
+colnames(manitowoc_weather_manual)
+View(manitowoc_weather_manual)
+
+# select columns for general info and daily conditions
+manitowoc_weather_daily <- manitowoc_weather_manual %>%
+  select(STATION:DATE, DailyAverageStationPressure, DailyAverageWindSpeed, 
+         DailyMaximumDryBulbTemperature, DailyMinimumDryBulbTemperature, 
+         DailyPrecipitation, DailyWeather) 
+View(manitowoc_weather_daily)
+
+# Precipitation: T indicates trace. Set to zero.
+# Precipitation: Blank represents times that were not sampled
+# Precipitation: s indicates suspect. Set to NA.
+manitowoc_weather_daily$DailyPrecipitation[manitowoc_weather_daily$DailyPrecipitation == "T"] <- 0 
+manitowoc_weather_daily$DailyPrecipitation <- as.numeric(manitowoc_weather_daily$DailyPrecipitation) 
+summary(manitowoc_weather_daily$DailyPrecipitation)
+
+# Temperature: air temperature = dry bulb temperature. 
+# Temperature: s indicates suspect. Set to NA.
+manitowoc_weather_daily$DailyMaximumDryBulbTemperature <-
+  as.numeric(manitowoc_weather_daily$DailyMaximumDryBulbTemperature) 
+manitowoc_weather_daily$DailyMinimumDryBulbTemperature <-
+  as.numeric(manitowoc_weather_daily$DailyMinimumDryBulbTemperature)
+
+# remove rows that do not contain precipitation data
+# access date information
+manitowoc_weather_daily <- manitowoc_weather_daily %>%
+  drop_na(DailyPrecipitation) %>% 
+  separate(col = DATE, into = c("Date", "Time"), sep = "T") 
+
+summary(manitowoc_weather_daily)
+str(manitowoc_weather_daily)
+
+# change date to date
+manitowoc_weather_daily$Date <- as.Date(manitowoc_weather_daily$Date, format = "%Y-%m-%d")
+
+# add month and year columns
+# notice data were not supplied prior to September 2013. Let's remove dates prior to 2014.
+manitowoc_weather_daily <- manitowoc_weather_daily %>%
+  mutate(Year = year(Date), 
+         Month = month(Date)) %>%
+  filter(Year > 2013)%>%
+  rename(dailyaveragestationpressure = DailyAverageStationPressure,
+         dailyaveragewindspeed = DailyAverageWindSpeed,
+         dailymaximumdrybulbtemperature = DailyMaximumDryBulbTemperature,
+         dailyminimumdrybulbtemperature = DailyMinimumDryBulbTemperature,
+         dailyprecipitation = DailyPrecipitation,
+         dailyweather = DailyWeather)
+```
+
+### rnoaa
+
+**Note: this section intended to run instead fo the "Manual" section above.**
+
+`rnoaa` allows us to download only a year at a time. We will need to download each year individually and then stitch the years together into a dataset. The `lcd` function allows us to download the relevant data.
+
+To find the lcd station code if you don't already have it, one method is to download the PDF information from your station of interest. Follow the numbered instructions in the "Manual" section and select "LCD PDF" instead of "LCD CSV" for step 7. The PDF that is downloaded includes the station code needed to run the `lcd` function.
+
+```{r, message = FALSE, warning = FALSE}
+
+manitowoc_weather_2012 <- lcd(station = "72645594897", year = 2012, verbose = TRUE)
+manitowoc_weather_2013 <- lcd(station = "72645594897", year = 2013, verbose = TRUE)
+manitowoc_weather_2014 <- lcd(station = "72645594897", year = 2014, verbose = TRUE)
+manitowoc_weather_2015 <- lcd(station = "72645594897", year = 2015, verbose = TRUE)
+manitowoc_weather_2016 <- lcd(station = "72645594897", year = 2016, verbose = TRUE)
+manitowoc_weather_2017 <- lcd(station = "72645594897", year = 2017, verbose = TRUE)
+manitowoc_weather_2018 <- lcd(station = "72645594897", year = 2018, verbose = TRUE)
+manitowoc_weather_2019 <- lcd(station = "72645594897", year = 2019, verbose = TRUE)
+manitowoc_weather_2020 <- lcd(station = "72645594897", year = 2020, verbose = TRUE)
+manitowoc_weather_2021 <- lcd(station = "72645594897", year = 2021, verbose = TRUE)
+
+# manitowoc_weather_2021 has two extra columns. remove those to make the columns identical to the other years.
+manitowoc_weather_2021 <- manitowoc_weather_2021 %>%
+  select(-dyhf, -dyts)
+
+
+```
+
+`rbind` allows us to bind rows together, one on top of the other. Data frames must have the same number of columns with the same names. 
+
+The `dplyr` package within `tidyverse` has a term called a pipe, designated as %>%. In coding language, the pipe means "then," allowing you to sequentially run functions on a given data frame. 
+
+Other wrangling functions we will use (feel free to add notes here or comment in the code): 
+
+* `select`
+* `drop_na`
+* `separate`
+* `mutate`
+* `filter`
+* `group_by`
+* `summarise`
+
+```{r, message = FALSE, warning = FALSE}
+# combine all years
+manitowoc_weather <- rbind(manitowoc_weather_2012, manitowoc_weather_2013,
+                           manitowoc_weather_2014, manitowoc_weather_2015,
+                           manitowoc_weather_2016, manitowoc_weather_2017,
+                           manitowoc_weather_2018, manitowoc_weather_2019,
+                           manitowoc_weather_2020, manitowoc_weather_2021)
+# examine the dataset
+colnames(manitowoc_weather)
+View(manitowoc_weather)
+
+# select columns for general info and daily conditions
+manitowoc_weather_daily <- manitowoc_weather %>%
+  select(station:name, dailyaveragestationpressure, dailyaveragewindspeed, 
+         dailymaximumdrybulbtemperature, dailyminimumdrybulbtemperature, 
+         dailyprecipitation, dailyweather) 
+View(manitowoc_weather_daily)
+
+# Precipitation: T indicates trace. Set to zero.
+# Precipitation: Blank represents times that were not sampled
+# Precipitation: s indicates suspect. Set to NA.
+manitowoc_weather_daily$dailyprecipitation[manitowoc_weather_daily$dailyprecipitation == "T"] <- 0 
+manitowoc_weather_daily$dailyprecipitation <- as.numeric(manitowoc_weather_daily$dailyprecipitation) 
+summary(manitowoc_weather_daily$dailyprecipitation)
+
+# Temperature: air temperature = dry bulb temperature. 
+# Temperature: s indicates suspect. Set to NA.
+manitowoc_weather_daily$dailymaximumdrybulbtemperature <-
+  as.numeric(manitowoc_weather_daily$dailymaximumdrybulbtemperature) 
+manitowoc_weather_daily$dailyminimumdrybulbtemperature <-
+  as.numeric(manitowoc_weather_daily$dailyminimumdrybulbtemperature)
+
+# remove rows that do not contain precipitation data
+# access date information
+manitowoc_weather_daily <- manitowoc_weather_daily %>%
+  drop_na(dailyprecipitation) %>% 
+  separate(col = date, into = c("Date", "Time"), sep = " ") 
+
+summary(manitowoc_weather_daily)
+str(manitowoc_weather_daily)
+
+# change date to date
+manitowoc_weather_daily$Date <- as.Date(manitowoc_weather_daily$Date, format = "%Y-%m-%d")
+
+# add month and year columns
+# notice data were not supplied prior to September 2013. Let's remove dates prior to 2014.
+manitowoc_weather_daily <- manitowoc_weather_daily %>%
+  mutate(Year = year(Date), 
+         Month = month(Date)) %>%
+  filter(Year > 2013) 
+```
+
+
+## Data Aggregation
+
+From our daily data, let's aggregate those data up to monthly and annual conditions. Precipitation will be summed to generate monthly and yearly totals, and temperatures will be averaged. The mean function automatically generates a blank if an NA is supplied as part of the calculation, so we will supply "na.rm = TRUE" to tell R to ignore NAs.
+
+```{r, message = FALSE, warning = FALSE}
+manitowoc_preciptemp_monthly <- manitowoc_weather_daily %>%
+  group_by(Year, Month) %>%
+  summarise(monthlyprecipitation = sum(dailyprecipitation),
+            avgmonthlymaxtemp = mean(dailymaximumdrybulbtemperature, na.rm = TRUE),
+            avgmonthlymintemp = mean(dailyminimumdrybulbtemperature, na.rm = TRUE))
+
+manitowoc_precip_annual <- manitowoc_weather_daily %>%
+  group_by(Year) %>%
+  summarise(annualprecipitation = sum(dailyprecipitation))
+  
+```
+
+## Exploratory visualization
+
+### Time series 
+```{r}
+# basic time series plot
+ggplot(manitowoc_weather_daily, aes(x = Date, y = dailyprecipitation)) +
+  geom_point()
+
+# improve the visualization
+ggplot(manitowoc_weather_daily, aes(x = Date, y = dailyprecipitation)) +
+  geom_point(alpha = 0.7) +
+  scale_y_log10() +
+  labs(y = "Daily precipitation (in)") +
+  theme_classic()
+
+ggplot(manitowoc_weather_daily, aes(x = Date, y = dailymaximumdrybulbtemperature)) +
+  geom_point(alpha = 0.7) +
+  labs(y = "Daily max. temperature (F)") +
+  theme_classic()
+
+```
+
+### Monthly conditions
+```{r}
+ggplot(manitowoc_weather_daily, aes(x = as.factor(Month), y = dailyprecipitation)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  #facet_wrap(vars(Year), ncol = 1) +
+  labs(x = "Month", y = "Daily precipitation (in)") +
+  theme_classic()
+
+ggplot(manitowoc_weather_daily, aes(x = as.factor(Month), y = dailyprecipitation)) +
+  geom_boxplot() +
+  geom_jitter(aes(color = Year), width = 0.2) +
+  scale_y_log10() +
+  labs(x = "Month", y = "Daily precipitation (in)") +
+  scale_color_viridis_c(end = 0.8) +
+  theme_classic()
+
+ggplot(manitowoc_preciptemp_monthly, aes(x = Month, y = monthlyprecipitation, color = as.factor(Year))) +
+  geom_line() +
+  geom_point() +
+  labs(y = "Monthly precipitation (in)", color = "Year") +
+  scale_color_viridis_d(end = 0.8) +
+  theme_classic()
+
+# your turn. plot annual precipitation by year. 
+# what style of graph makes sense?
+
+```
+
+## Data Management
+
+### Saving datasets
+
+General rules: 
+
+1. Save processed datasets separately from raw data
+2. Use informative file names that are easily sorted and organized in a folder
+3. No spaces in file names
+
+```{r}
+write.csv(manitowoc_weather_daily, file = "./Data/Session3_Weather/Processed/Manitowoc_weather_daily_2014-2021.csv",
+          row.names = FALSE)
+
+write.csv(manitowoc_preciptemp_monthly, file = "./Data/Session3_Weather/Processed/Manitowoc_weather_monthly_2014-2021.csv",
+          row.names = FALSE)
+
+```
+
+
+### Saving graphs
+
+In RStudio, you can manually export graphs by saving as image, PDF, or copy-paste. However, the image resolution is poor by this method, and the method itself is not reproducible. Saving your graphs using code is preferable. 
+
+`ggsave` automatically saves the current plot if you don't specify which plot. Alternatively, you can name a plot and save that named plot at any point (does not need to be plotted at the time of saving). Height and width are automatically in inches, and the text size scales accordingly (smaller dimensions = larger text).
+
+```{r}
+ggplot(manitowoc_weather_daily, aes(x = Date, y = dailyprecipitation)) +
+  geom_point(alpha = 0.7) +
+  scale_y_log10() +
+  labs(y = "Daily precipitation (in)") +
+  theme_classic()
+# ggsave("./Output/Session3_Weather/manitowoc_precipitation_timeseries.jpg",
+#        height = 4, width = 5)
+
+precip_monthly_boxplot <-
+ggplot(manitowoc_weather_daily, aes(x = as.factor(Month), y = dailyprecipitation)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  labs(x = "Month", y = "Daily precipitation (in)") +
+  theme_classic()
+# ggsave(precip_monthly_boxplot, "./Output/Session3_Weather/manitowoc_precipitation_monthlyboxplot.jpg",
+#        height = 4, width = 5)
+
+```
+
+
