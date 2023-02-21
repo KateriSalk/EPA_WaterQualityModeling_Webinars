@@ -36,7 +36,7 @@ grid.to_raster(fdir, os.path.join(os.path.join(output, 'DEM_FlowD.tif')))
 
 # Calculate flow accumulation
 acc = grid.accumulation(fdir, dirmap=dirmap)
-grid.to_raster(fdir, os.path.join(os.path.join(output, 'DEM_FlowA.tif')))
+grid.to_raster(acc, os.path.join(os.path.join(output, 'DEM_FlowA.tif')))
 
 ## Snap pour point to high accumulation cell
 x_snap, y_snap = grid.snap_to_mask(acc > 1000, (lat, long))
