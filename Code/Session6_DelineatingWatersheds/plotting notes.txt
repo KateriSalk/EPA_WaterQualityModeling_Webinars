@@ -1,0 +1,77 @@
+import matplotlib.pyplot as plt
+from matplotlib import colors
+import seaborn as sns
+import os
+
+# Plot dem (OPTIONAL))
+#-------------------------------------------------------------
+fig, ax = plt.subplots(figsize=(8,6))
+fig.patch.set_alpha(0)
+plt.figure(facecolor='white')
+plt.imshow(dem, extent=grid.extent, cmap='terrain', zorder=1)
+plt.colorbar(label='Elevation (m)')
+plt.grid(zorder=0)
+plt.title('Digital elevation map', size=14)
+plt.xlabel('Longitude')
+plt.ylabel('Latitude')
+plt.tight_layout()
+
+
+# Plot Flow Direction (OPTIONAL)
+#-----------------------------------------------------------
+fig = plt.figure(figsize=(8,6))
+fig.patch.set_alpha(0)
+plt.figure(facecolor='white')
+plt.imshow(fdir, extent=grid.extent, cmap='viridis', zorder=2)
+boundaries = ([0] + sorted(list(dirmap)))
+plt.colorbar(boundaries= boundaries, values=sorted(dirmap))
+plt.xlabel('Longitude')
+plt.ylabel('Latitude')
+plt.title('Flow direction grid', size=14)
+plt.grid(zorder=-1)
+plt.tight_layout()
+
+# Plot Flow Accumulation (OPTIONAL)
+#-----------------------------------------------------------
+fig, ax = plt.subplots(figsize=(8,6))
+fig.patch.set_alpha(0)
+plt.grid('on', zorder=0)
+im = ax.imshow(acc, extent=grid.extent, zorder=2,
+               cmap='cubehelix',
+               norm=colors.LogNorm(1, acc.max()),
+               interpolation='bilinear')
+plt.colorbar(im, ax=ax, label='Upstream Cells')
+plt.title('Flow Accumulation', size=14)
+plt.xlabel('Longitude')
+plt.ylabel('Latitude')
+plt.tight_layout()
+
+
+# Delineate the catchment
+#----------------------------------------------------------------------------------------
+# Crop and plot the catchment (OPTIONAL)
+grid.clip_to(catch)
+clipped_catch = grid.view(catch)
+fig, ax = plt.subplots(figsize=(8,6))
+fig.patch.set_alpha(0)
+plt.grid('on', zorder=0)
+
+im = ax.imshow(np.where(clipped_catch, clipped_catch, np.nan), extent=grid.extent, zorder=1, cmap='Greys_r')
+plt.xlabel('Longitude')
+plt.ylabel('Latitude')
+plt.title('Delineated Catchment', size=14)
+
+# Plot branches (OPTIONAL)
+----------------------------------------------------------------------------
+sns.set_palette('husl')
+fig, ax = plt.subplots(figsize=(8.5,6.5))
+
+plt.xlim(grid.bbox[0], grid.bbox[2])
+plt.ylim(grid.bbox[1], grid.bbox[3])
+ax.set_aspect('equal')
+
+for branch in branches['features']:
+    line = np.asarray(branch['geometry']['coordinates'])
+    plt.plot(line[:, 0], line[:, 1])
+    
+_ = plt.title('D8 channels', size=14)
